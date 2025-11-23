@@ -1,0 +1,9 @@
+body{font-family: Arial, Helvetica, sans-serif;padding:20px}
+.site-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.products-grid{display:flex;gap:12px;flex-wrap:wrap}
+.card{border:1px solid #ddd;padding:12px;border-radius:6px;width:200px}
+button{cursor:pointer;padding:6px 10px;border-radius:4px}
+.hidden{display:none}
+#cart-section{margin-top:20px;border-top:1px solid #eee;padding-top:12px}
+.cart-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #f0f0f0}
+

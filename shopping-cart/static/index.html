@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>JTGeats — Demo Shop</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header style="display:flex;align-items:center;justify-content:space-between;padding:20px;">
+    <h1>JTGeats — Demo Shop</h1>
+    <div>
+      <button id="view-cart-btn">View Cart (<span id="cart-count">0</span>)</button>
+      <!-- Orders button hidden until user logs in -->
+      <button id="view-orders-btn" style="display:none">Orders</button>
+      <button id="logout-btn" style="display:none">Logout</button>
+    </div>
+  </header>
+
+  <main style="padding:18px;">
+    <section id="auth">
+      <h2>Signup / Login</h2>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input id="username" placeholder="username" />
+        <input id="password" placeholder="password" type="password" />
+        <button id="signup-btn">Signup</button>
+        <button id="login-btn">Login</button>
+      </div>
+      <small id="auth-msg" style="color:darkred"></small>
+    </section>
+
+    <hr/>
+
+    <section>
+      <h2>Products</h2>
+      <div id="products" style="display:flex;gap:18px;flex-wrap:wrap"></div>
+    </section>
+
+    <hr/>
+
+    <section id="cart-modal" style="display:none;">
+      <h2>Your Cart</h2>
+      <div id="cart-items"></div>
+      <p id="cart-total">Total: ₹ 0</p>
+      <div style="margin-top:8px;">
+        <button id="close-cart">Close</button>
+        <button id="checkout-btn">Checkout</button>
+      </div>
+    </section>
+
+    <hr/>
+
+    <!-- ORDER HISTORY SECTION -->
+    <section id="orders" style="display:none;">
+      <h2>Your Orders</h2>
+      <div id="orders-list"></div>
+      <div style="margin-top:8px;">
+        <button id="close-orders">Close</button>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
+
+

@@ -1,0 +1,352 @@
+package main
+
+import (
+	"net/http"
+	"strconv"
+	"sync"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+)
+
+// Simple in-memory store (not persistent) for demo / assignment.
+
+type Product struct {
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Price int    `json:"price"` // price in cents/rupees as integer
+}
+
+type User struct {
+	ID       int    `json:"id"`
+	Username string `json:"username"`
+	Password string `json:"-"` // not returned
+}
+
+type CartItem struct {
+	Product  Product `json:"product"`
+	Quantity int     `json:"quantity"`
+}
+
+type Cart struct {
+	UserID int        `json:"user_id"`
+	Items  []CartItem `json:"items"`
+	Total  int        `json:"total"`
+}
+
+type Order struct {
+	ID    int        `json:"id"`
+	User  int        `json:"user_id"`
+	Items []CartItem `json:"items"`
+	Total int        `json:"total"`
+}
+
+// Global in-memory data (protected by mutex)
+var (
+	products = []Product{
+		{ID: 1, Name: "T-shirt", Price: 399},
+		{ID: 2, Name: "Jeans", Price: 1299},
+		{ID: 3, Name: "Sneakers", Price: 2499},
+	}
+
+	users       = map[int]User{}     // id -> user
+	usersByName = map[string]int{}   // username -> id
+	tokens      = map[string]int{}   // token -> user id
+	carts       = map[int]*Cart{}    // user id -> cart
+	orders      = []Order{}          // order list
+	mutex       = sync.RWMutex{}
+	nextUserID  = 1
+	nextOrderID = 1
+)
+
+func main() {
+	r := gin.Default()
+
+	// Serve static files under /static
+	r.Static("/static", "./static")
+
+	// Serve index at root
+	r.GET("/", func(c *gin.Context) {
+		c.File("./static/index.html")
+	})
+
+	// health
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	// Users: signup
+	r.POST("/users", signupHandler)
+	// Users: login
+	r.POST("/users/login", loginHandler)
+
+	// Products list
+	r.GET("/products", productsHandler)
+
+	// Cart operations
+	r.POST("/cart/add", addToCartHandler)
+	r.GET("/cart", getCartHandler)
+	r.DELETE("/cart/remove/:id", removeFromCartHandler)
+
+	// Orders
+	r.POST("/orders", createOrderHandler)
+	r.GET("/orders", listOrdersHandler)
+
+	// Start server
+	r.Run(":8080")
+}
+
+// Helpers
+func authUserID(c *gin.Context) (int, bool) {
+	// Look for Authorization header: "Bearer <token>"
+	auth := c.GetHeader("Authorization")
+	if len(auth) > 7 && auth[:7] == "Bearer " {
+		token := auth[7:]
+		mutex.RLock()
+		uid, ok := tokens[token]
+		mutex.RUnlock()
+		return uid, ok
+	}
+	// fallback: allow requests without token as guest user id 0
+	return 0, false
+}
+
+// Handlers
+
+// Signup: expects { "username": "...", "password": "..." }
+func signupHandler(c *gin.Context) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
+		return
+	}
+	if body.Username == "" || body.Password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username and password required"})
+		return
+	}
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if _, exists := usersByName[body.Username]; exists {
+		c.JSON(http.StatusConflict, gin.H{"error": "username already exists"})
+		return
+	}
+	uid := nextUserID
+	nextUserID++
+	u := User{ID: uid, Username: body.Username, Password: body.Password}
+	users[uid] = u
+	usersByName[body.Username] = uid
+
+	// create empty cart
+	carts[uid] = &Cart{UserID: uid, Items: []CartItem{}, Total: 0}
+
+	c.JSON(http.StatusCreated, gin.H{"message": "user created", "user": gin.H{"id": u.ID, "username": u.Username}})
+}
+
+// Login: expects { "username": "...", "password": "..." } returns token
+func loginHandler(c *gin.Context) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
+		return
+	}
+	mutex.RLock()
+	uid, ok := usersByName[body.Username]
+	mutex.RUnlock()
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	mutex.RLock()
+	user := users[uid]
+	mutex.RUnlock()
+	if user.Password != body.Password {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	// create token
+	token := uuid.New().String()
+	mutex.Lock()
+	tokens[token] = user.ID
+	mutex.Unlock()
+	c.JSON(http.StatusOK, gin.H{"token": token})
+}
+
+// Products handler
+func productsHandler(c *gin.Context) {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	// send the slice as JSON
+	c.JSON(http.StatusOK, products)
+}
+
+// Add to cart: expects { "product_id": 1, "quantity": 2 }
+func addToCartHandler(c *gin.Context) {
+	var body struct {
+		ProductID int `json:"product_id"`
+		Quantity  int `json:"quantity"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
+		return
+	}
+	if body.Quantity <= 0 {
+		body.Quantity = 1
+	}
+
+	// find product
+	var prod *Product
+	mutex.RLock()
+	for i := range products {
+		if products[i].ID == body.ProductID {
+			p := products[i]
+			prod = &p
+			break
+		}
+	}
+	mutex.RUnlock()
+	if prod == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
+		return
+	}
+
+	uid, hasUser := authUserID(c)
+	if !hasUser {
+		// if no token provided, create/use guest cart under user id 0
+		uid = 0
+		mutex.Lock()
+		if _, ok := carts[0]; !ok {
+			carts[0] = &Cart{UserID: 0, Items: []CartItem{}, Total: 0}
+		}
+		mutex.Unlock()
+	}
+
+	mutex.Lock()
+	cart := carts[uid]
+	if cart == nil {
+		cart = &Cart{UserID: uid, Items: []CartItem{}, Total: 0}
+		carts[uid] = cart
+	}
+	// if product exists in cart, increase qty
+	found := false
+	for i := range cart.Items {
+		if cart.Items[i].Product.ID == prod.ID {
+			cart.Items[i].Quantity += body.Quantity
+			found = true
+			break
+		}
+	}
+	if !found {
+		cart.Items = append(cart.Items, CartItem{Product: *prod, Quantity: body.Quantity})
+	}
+	// recalc total
+	total := 0
+	for _, it := range cart.Items {
+		total += it.Product.Price * it.Quantity
+	}
+	cart.Total = total
+	mutex.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{"message": "added"})
+}
+
+// Get cart
+func getCartHandler(c *gin.Context) {
+	uid, _ := authUserID(c)
+	mutex.RLock()
+	cart := carts[uid]
+	mutex.RUnlock()
+	if cart == nil {
+		// return empty cart
+		c.JSON(http.StatusOK, gin.H{"items": []CartItem{}, "total": 0})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": cart.Items, "total": cart.Total})
+}
+
+// Remove from cart: delete item with product id param
+func removeFromCartHandler(c *gin.Context) {
+	param := c.Param("id")
+	id, err := strconv.Atoi(param)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	uid, _ := authUserID(c)
+	mutex.Lock()
+	defer mutex.Unlock()
+	cart := carts[uid]
+	if cart == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "cart not found"})
+		return
+	}
+	newItems := []CartItem{}
+	for _, it := range cart.Items {
+		if it.Product.ID == id {
+			// skip (remove)
+			continue
+		}
+		newItems = append(newItems, it)
+	}
+	cart.Items = newItems
+	// recalc
+	total := 0
+	for _, it := range cart.Items {
+		total += it.Product.Price * it.Quantity
+	}
+	cart.Total = total
+	c.JSON(http.StatusOK, gin.H{"message": "removed", "cart": cart})
+}
+
+// Create order from cart: expects { "user_id": 1 } OR uses token
+func createOrderHandler(c *gin.Context) {
+	var body struct {
+		UserID int `json:"user_id"`
+	}
+	_ = c.BindJSON(&body)
+
+	uid, hasToken := authUserID(c)
+	if hasToken {
+		// prefer token user
+		body.UserID = uid
+	}
+	if body.UserID == 0 && !hasToken {
+		// if guest cart exists under 0, allow ordering (or return error)
+		// for simplicity allow guest uid 0
+	}
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	cart := carts[body.UserID]
+	if cart == nil || len(cart.Items) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cart empty"})
+		return
+	}
+	order := Order{
+		ID:    nextOrderID,
+		User:  body.UserID,
+		Items: cart.Items,
+		Total: cart.Total,
+	}
+	nextOrderID++
+	orders = append(orders, order)
+
+	// clear cart
+	carts[body.UserID] = &Cart{UserID: body.UserID, Items: []CartItem{}, Total: 0}
+
+	c.JSON(http.StatusOK, gin.H{"order": order})
+}
+
+// List orders
+func listOrdersHandler(c *gin.Context) {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	c.JSON(http.StatusOK, orders)
+}
+
