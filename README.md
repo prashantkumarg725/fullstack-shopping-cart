@@ -11,7 +11,7 @@ This project includes:
 3. Run: go run main.go
 
 ## Test API using browser:
-http://localhost:8080
+http://localhost:8080/static/
 
 ## Frontend files:
 Located in /static/
